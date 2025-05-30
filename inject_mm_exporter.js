@@ -436,7 +436,7 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                     new TextEncoder().encode(path)
                 )
             )
-        ).map((b) => b.toString(16).padStart(2, "0")).join("") + path.split(".").pop();
+        ).map((b) => b.toString(16).padStart(2, "0")).join("") + "." + path.split(".").pop();
         if (!invertedMediaMap.has(zipPath)) {
             document.getElementById(statusMessageElemId).innerText = `${cardIdx}/${cardTotal}\n Downloading ${path}`;
             let blob = await fetchMigakuSrsMedia(path.slice(5), accessToken);
