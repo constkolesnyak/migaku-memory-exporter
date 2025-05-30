@@ -115,6 +115,7 @@ const fetchMigakuSrsMedia = async (path, auth) => {
         },
         cache: "force-cache",
     });
+    if (resp.status !== 200) return null;
     return await resp.blob();
 };
 
@@ -425,10 +426,15 @@ const ankiDbPutCol = (db, usedCardTypes) => {
 
 const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia) => {
     const invertedMediaMap = new Map();
-    let curMediaNum = 1;
+    let curMediaNum = 0;
 
     let accessToken = shouldIncludeMedia ? await fetchAccessToken() : null;
     const fetchAndZipMedia = async (path, cardIdx, cardTotal) => {
+        if (path.trim().length === 0) return null;
+        let extension = "." + path.split(".").pop();
+        if (extension.length >= 7) {
+            extension = "";
+        }
         const zipPath = Array.from(
             new Uint8Array(
                 await window.crypto.subtle.digest(
@@ -436,13 +442,17 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                     new TextEncoder().encode(path)
                 )
             )
-        ).map((b) => b.toString(16).padStart(2, "0")).join("") + "." + path.split(".").pop();
+        ).map((b) => b.toString(16).padStart(2, "0")).join("") + extension;
         if (!invertedMediaMap.has(zipPath)) {
             document.getElementById(statusMessageElemId).innerText = `${cardIdx}/${cardTotal}\n Downloading ${path}`;
             let blob = await fetchMigakuSrsMedia(path.slice(5), accessToken);
-            zipHandle.file(zipPath, blob)
-            invertedMediaMap.set(zipPath, curMediaNum.toString());
-            curMediaNum++;
+            if (!blob) {
+                return null;
+            } else {
+                zipHandle.file(curMediaNum, blob)
+                invertedMediaMap.set(zipPath, curMediaNum.toString());
+                curMediaNum++;
+            }
         }
         return zipPath;
     };
@@ -471,7 +481,11 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                     case "IMAGE":
                         if (shouldIncludeMedia) {
                             let zipPath = await fetchAndZipMedia(x, i, cardList.length);
-                            fieldsList.push(`<img src="${zipPath}>`);
+                            if (zipPath) {
+                                fieldsList.push(`<img src="${zipPath}>`);
+                            } else {
+                                fieldsList.push("");
+                            }
                         } else {
                             fieldsList.push("");
                         }
@@ -480,7 +494,11 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                     case "AUDIO_LONG":
                         if (shouldIncludeMedia) {
                             let zipPath = await fetchAndZipMedia(x, i, cardList.length);
-                            fieldsList.push(`[sound:${zipPath}]`);
+                            if (zipPath) {
+                                fieldsList.push(`[sound:${zipPath}]`);
+                            } else {
+                                fieldsList.push("");
+                            }
                         } else {
                             fieldsList.push("");
                         }
@@ -573,7 +591,7 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
     db.run("COMMIT");
 
     zipHandle.file("media", JSON.stringify(Object.fromEntries(new Map(
-        Array.from(invertedMediaMap, x => x.reverse())
+       Array.from(invertedMediaMap, x => x.reverse())
     ))));
 };
 
@@ -599,6 +617,7 @@ const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia) => {
 
     const exportedDb = ankiDb.export();
     zip.file("collection.anki2", exportedDb);
+    document.getElementById(statusMessageElemId).innerText = `Constructing apkg file (be patient)`;
     zip.generateAsync({type: "blob"}).then((zipBlob) => {
         document.getElementById(statusMessageElemId).innerText = "Done";
 
