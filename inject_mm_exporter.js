@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://study.migaku.com/*
 // @grant       GM_getResourceURL
-// @version     1.0
+// @version     1.1
 // @author      -
 // @description 29/05/2025, 13:09:19
 // @require      data:application/javascript,%3BglobalThis.setImmediate%3DsetTimeout%3B
@@ -180,6 +180,10 @@ const fetchCardTypes = (db) => {
     return res;
 };
 
+const fetchReviewHistory = (db) => {
+    return fetchDbRowsAsObjectArray(db, "SELECT id, mod, del, day, interval, factor, cardId, duration, type, lapseIndex FROM review");
+};
+
 const initNewAnkiSqlDb = (SQL) => {
     const db = new SQL.Database();
     db.run(`
@@ -202,7 +206,7 @@ const initNewAnkiSqlDb = (SQL) => {
             odid integer not null,
             flags integer not null,
             data text not null
-        );
+        ) STRICT;
         CREATE TABLE col (
             id integer primary key,
             crt integer not null,
@@ -211,18 +215,18 @@ const initNewAnkiSqlDb = (SQL) => {
             ver integer not null,
             dty integer not null,
             usn integer not null,
-            ls integr not null,
+            ls integer not null,
             conf text not null,
             models text not null,
             decks text not null,
             dconf text not null,
             tags text not null
-        );
+        ) STRICT;
         CREATE TABLE graves (
             usn integer not null,
             oid integer not null,
             type integer not null
-        );
+        ) STRICT;
         CREATE TABLE notes (
             id integer primary key,
             guid text not null,
@@ -235,7 +239,7 @@ const initNewAnkiSqlDb = (SQL) => {
             csum integer not null,
             flags integer not null,
             data text not null
-        );
+        ) STRICT;
         CREATE TABLE revlog (
             id integer primary key,
             cid integer not null,
@@ -246,7 +250,7 @@ const initNewAnkiSqlDb = (SQL) => {
             factor integer not null,
             time integer not null,
             type integer not null
-        );
+        ) STRICT;
         CREATE INDEX ix_cards_nid on cards (nid);
         CREATE INDEX ix_cards_sched on cards (did, queue, due);
         CREATE INDEX ix_cards_usn on cards (usn);
@@ -595,6 +599,51 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
     ))));
 };
 
+const ankiDbFillRevlog = (db, reviewHistory, cards) => {
+    const revIntervals = new Map();
+    reviewHistory.sort((a, b) => a.id - b.id);
+
+    db.run("BEGIN TRANSACTION;");
+    for (const review of reviewHistory) {
+        let ease = 0;
+        // 0 == learn?
+        // 1 == fail?
+        // 2 == pass?
+        if (review.type === 0) {
+            ease = 2; // ok (learn) TODO
+        } else if (review.type === 1) {
+            ease = 1; // wrong (review) TODO
+        } else if (review.type == 2) {
+            ease = 3; // ok (review) // TODO
+        } else {
+            window.alert("Unknown review type: " + review);
+            debugger;
+        }
+
+        let prevInterval = 0;
+        if (revIntervals.has(review.cardId)) {
+            prevInterval = revIntervals.get(review.cardId);
+        }
+
+        db.run(
+            "INSERT INTO revlog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                review.id, // id
+                review.cardId, // cid
+                -1, // usn
+                ease, // ease
+                Math.floor(review.interval), // ivl
+                prevInterval, // lastIvl
+                Math.floor(review.factor * 1000), // factor
+                Math.min(review.duration, 60) * 1000, // time
+                review.type === 0 ? 0 : 1, // type 0=learn 1=review
+            ]
+        );
+        revIntervals.set(review.cardId, Math.floor(review.interval));
+    }
+    db.run("COMMIT");
+};
+
 
 const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia) => {
     const cards = fetchDeckCards(db, deckId).filter((x) => !x.del);
@@ -612,6 +661,9 @@ const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia) => {
 
     let zip = new JSZip();
     const ankiDb = initNewAnkiSqlDb(SQL);
+
+    const reviewHistory = fetchReviewHistory(db).filter((x) => !x.del);
+    ankiDbFillRevlog(ankiDb, reviewHistory, cards);
     const cardTypeIdsToModelIds = ankiDbPutCol(ankiDb, usedCardTypes);
     await ankiDbFillCards(ankiDb, zip, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia);
 
