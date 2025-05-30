@@ -572,9 +572,9 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
     }
     db.run("COMMIT");
 
-    zipHandle.file("media", JSON.stringify(new Map(
+    zipHandle.file("media", JSON.stringify(Object.fromEntries(new Map(
         Array.from(invertedMediaMap, x => x.reverse())
-    )));
+    ))));
 };
 
 
