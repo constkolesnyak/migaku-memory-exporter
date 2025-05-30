@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://study.migaku.com/*
 // @grant       GM_getResourceURL
-// @version     1.1
+// @version     1.2
 // @author      -
 // @description 29/05/2025, 13:09:19
 // @require      data:application/javascript,%3BglobalThis.setImmediate%3DsetTimeout%3B
@@ -428,7 +428,7 @@ const ankiDbPutCol = (db, usedCardTypes) => {
     return cardTypeIdsToModelIds;
 };
 
-const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia) => {
+const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax) => {
     const invertedMediaMap = new Map();
     let curMediaNum = 0;
 
@@ -476,8 +476,12 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                 const fieldInfo = defCardFields[fieldIdx];
                 switch (fieldInfo.type) {
                     case "SYNTAX":
-                        // TODO: Maybe translate syntax into proper ruby text?
-                        fieldsList.push(x.replaceAll(/\[.*?\]/g, "").replaceAll("{", "").replaceAll("}", ""));
+                        if (keepSyntax) {
+                            fieldsList.push(x);
+                        } else {
+                            // TODO: Maybe translate syntax into proper ruby text?
+                            fieldsList.push(x.replaceAll(/\[.*?\]/g, "").replaceAll("{", "").replaceAll("}", ""));
+                        }
                         break;
                     case "TEXT":
                         fieldsList.push(x);
@@ -645,7 +649,7 @@ const ankiDbFillRevlog = (db, reviewHistory, cards) => {
 };
 
 
-const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia) => {
+const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia, keepSyntax) => {
     const cards = fetchDeckCards(db, deckId).filter((x) => !x.del);
     const cardTypes = fetchCardTypes(db);
 
@@ -665,7 +669,7 @@ const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia) => {
     const reviewHistory = fetchReviewHistory(db).filter((x) => !x.del);
     ankiDbFillRevlog(ankiDb, reviewHistory, cards);
     const cardTypeIdsToModelIds = ankiDbPutCol(ankiDb, usedCardTypes);
-    await ankiDbFillCards(ankiDb, zip, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia);
+    await ankiDbFillCards(ankiDb, zip, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax);
 
     const exportedDb = ankiDb.export();
     zip.file("collection.anki2", exportedDb);
@@ -726,10 +730,18 @@ const inject = async () => {
     includeMediaLabel.for = includeMediaCheckbox.id;
     includeMediaLabel.innerText = "Include media (this may take a very long time and could fail)"
 
+    div.appendChild(document.createElement("br"));
+    const keepSyntaxCheckbox = div.appendChild(document.createElement("input"))
+    keepSyntaxCheckbox.type = "checkbox"
+    keepSyntaxCheckbox.id = "mgkexporterKeepsyntaxCheckbox";
+    const keepSyntaxLabel = div.appendChild(document.createElement("label"));
+    keepSyntaxLabel.for = includeMediaCheckbox.id;
+    keepSyntaxLabel.innerText = "Keep migaku syntax (your note type can display furigana with it)"
+
     exportButton.onclick = async () => {
         const deckId = deckSelect.options[deckSelect.selectedIndex].value;
         const deckName = deckSelect.options[deckSelect.selectedIndex].innerText;
-        await doExportDeck(SQL, srsDb, deckId, deckName, includeMediaCheckbox.checked);
+        await doExportDeck(SQL, srsDb, deckId, deckName, includeMediaCheckbox.checked, keepSyntaxCheckbox.checked);
     };
 
     const statusMessageElem = div.appendChild(document.createElement("div"));
