@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://study.migaku.com/*
 // @grant       GM_getResourceURL
-// @version     1.2
+// @version     1.3
 // @author      -
 // @description 29/05/2025, 13:09:19
 // @require      data:application/javascript,%3BglobalThis.setImmediate%3DsetTimeout%3B
