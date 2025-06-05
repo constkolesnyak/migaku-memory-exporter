@@ -1,4 +1,6 @@
 # migaku-anki-exporter
+### !! Use at your own risk !!
+
 Unofficial Migaku Memory export script
 
 Load it into a manager like Tampermonkey and it should add new buttons on your MM page.
