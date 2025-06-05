@@ -14,6 +14,7 @@
 
 
 const statusMessageElemId = "mgkexporterStatusMessage";
+const STORENAME_MEDIACACHE = "mediacache"
 
 
 const decompress = async (blob) => {
@@ -130,6 +131,58 @@ const openSrsDb = (SQL) => {
             resolve(new SQL.Database(raw));
         });
     });
+}
+
+const openMediaChacheIdb = () => {
+    return new Promise((resolve) => {
+        const dbRequest = indexedDB.open("unofficialmgkexporterMediaDb", 1);
+        dbRequest.onupgradeneeded = (ev) => {
+            const idb = ev.target.result;
+            if (!idb.objectStoreNames.contains(STORENAME_MEDIACACHE)) {
+                idb.createObjectStore(STORENAME_MEDIACACHE, {
+                    keyPath: "key",
+                    autoIncrement: false,
+                });
+            }
+        };
+        dbRequest.onsuccess = (ev) => {
+            const idb = ev.target.result;
+            resolve(idb);
+        };
+    });
+};
+
+const mediaCachePutBlob = (db, key, blob) => {
+    return new Promise((resolve) => {
+        db.transaction(STORENAME_MEDIACACHE, "readwrite")
+            .objectStore(STORENAME_MEDIACACHE)
+            .add({key: key, blob: blob})
+            .onsuccess = (ev) => {
+                resolve(ev.target.result);
+            }
+    });
+};
+
+const mediaCacheGetByKeyOrNull = (db, key) => {
+    return new Promise((resolve) => {
+        const req = db.transaction(STORENAME_MEDIACACHE, "readonly")
+            .objectStore(STORENAME_MEDIACACHE)
+            .get(key);
+        req.onsuccess = (ev) => {
+            if (ev.target.result) {
+                resolve(ev.target.result.blob);
+            } else {
+                resolve(null);
+            }
+        };
+        req.onerror = (_) => {
+            resolve(null);
+        }
+    })
+};
+
+const mediaCacheCheckHasKey = async (db, key) => {
+    return (await mediaCacheGetByKeyOrNull(db, key) !== null);
 }
 
 
@@ -428,13 +481,105 @@ const ankiDbPutCol = (db, usedCardTypes) => {
     return cardTypeIdsToModelIds;
 };
 
-const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax) => {
+const setStatus = (message) => {
+    console.log(message);
+    document.getElementById(statusMessageElemId).innerText = message;
+};
+
+const mediaCacheGatherAllMedia = async (mediacacheDb, cardsByCardType, cardTypes) => {
+    return new Promise(async (resolve, reject) => {
+        const pathSet = new Set();
+        setStatus("Preparing media paths")
+        for (const typeKey of cardsByCardType.keys()) {
+            const cardList = cardsByCardType.get(typeKey);
+            const cardType = cardTypes.get(typeKey);
+            const defCardFields = cardType.config.fields;
+            for (const card of cardList) {
+                let fieldIdx = 0;
+                const handleField = (x) => {
+                    if (fieldIdx >= defCardFields.length) return;
+                    const fieldInfo = defCardFields[fieldIdx];
+                    fieldIdx++;
+                    switch (fieldInfo.type) {
+                        case "IMAGE":
+                        case "AUDIO":
+                        case "AUDIO_LONG":
+                            if (x.trim().length === 0) return;
+                            pathSet.add(x.slice(5));
+                            break
+                        default:
+                            break;
+                    }
+                };
+                handleField(card.primaryField);
+                handleField(card.secondaryField);
+                for (const part of card.fields.split("\u001f")) {
+                    handleField(part);
+                }
+            }
+        }
+        setStatus("Beginning media download");
+
+        let dlCount = 0;
+        let queue = Array.from(pathSet);
+        const fullMediaCount = queue.length;
+        let accessToken = await fetchAccessToken();
+        let mediaMap = new Map();
+        const workerProc = async () => {
+            while (queue.length > 0) {
+                const path = queue.shift();
+
+                let extension = "." + path.split(".").pop();
+                if (extension.length >= 7) {
+                    extension = "";
+                }
+                const zipPath = Array.from(
+                    new Uint8Array(
+                        await window.crypto.subtle.digest(
+                            "SHA-1",
+                            new TextEncoder().encode(path)
+                        )
+                    )
+                ).map((b) => b.toString(16).padStart(2, "0")).join("") + extension;
+
+                if (await mediaCacheCheckHasKey(mediacacheDb, zipPath)) {
+                    dlCount++;
+                    setStatus(`${dlCount}/${fullMediaCount}\n From cache ${path}`);
+                    mediaMap.set(path, zipPath);
+                    continue;
+                }
+                console.log(`STARTING ${path}`)
+                let blob = await fetchMigakuSrsMedia(path, accessToken);
+                dlCount++;
+                setStatus(`${dlCount}/${fullMediaCount}\n Downloaded ${path}`);
+                if (!blob) {
+                    continue;
+                } else {
+                    mediaCachePutBlob(mediacacheDb, zipPath, blob);
+                    mediaMap.set(path, zipPath);
+                }
+            }
+        };
+
+        const workerCount = 5; // TODO: Can this be raised safely?
+        let workerPromises = new Array();
+        for (let i = 0; i < workerCount; i++) {
+            workerPromises.push(workerProc());
+        }
+        Promise.all(workerPromises).then(() => {
+            resolve(mediaMap);
+        }, () => {
+            reject();
+        });
+    });
+};
+
+const ankiDbFillCards = async (db, mediacacheDb, zipHandle, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax) => {
     const invertedMediaMap = new Map();
     let curMediaNum = 0;
-
-    let accessToken = shouldIncludeMedia ? await fetchAccessToken() : null;
-    const fetchAndZipMedia = async (path, cardIdx, cardTotal) => {
-        if (path.trim().length === 0) return null;
+    const zipMedia = async (dirtyPath) => {
+        if (dirtyPath.trim().length === 0) return null;
+        const path = dirtyPath.slice(5);
         let extension = "." + path.split(".").pop();
         if (extension.length >= 7) {
             extension = "";
@@ -448,12 +593,11 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
             )
         ).map((b) => b.toString(16).padStart(2, "0")).join("") + extension;
         if (!invertedMediaMap.has(zipPath)) {
-            document.getElementById(statusMessageElemId).innerText = `${cardIdx}/${cardTotal}\n Downloading ${path}`;
-            let blob = await fetchMigakuSrsMedia(path.slice(5), accessToken);
-            if (!blob) {
+            const mediaBlob = await mediaCacheGetByKeyOrNull(mediacacheDb, zipPath);
+            if (!mediaBlob) {
                 return null;
             } else {
-                zipHandle.file(curMediaNum, blob)
+                zipHandle.file(curMediaNum, mediaBlob);
                 invertedMediaMap.set(zipPath, curMediaNum.toString());
                 curMediaNum++;
             }
@@ -461,6 +605,7 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
         return zipPath;
     };
 
+    setStatus("Converting cards")
     db.run("BEGIN TRANSACTION;");
     for (const typeKey of cardsByCardType.keys()) {
         const modelId = cardTypeIdsToModelIds.get(typeKey);
@@ -488,7 +633,7 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                         break;
                     case "IMAGE":
                         if (shouldIncludeMedia) {
-                            let zipPath = await fetchAndZipMedia(x, i, cardList.length);
+                            const zipPath = await zipMedia(x);
                             if (zipPath) {
                                 fieldsList.push(`<img src="${zipPath}>`);
                             } else {
@@ -501,7 +646,7 @@ const ankiDbFillCards = async (db, zipHandle, cardsByCardType, cardTypes, cardTy
                     case "AUDIO":
                     case "AUDIO_LONG":
                         if (shouldIncludeMedia) {
-                            let zipPath = await fetchAndZipMedia(x, i, cardList.length);
+                            const zipPath = await zipMedia(x);
                             if (zipPath) {
                                 fieldsList.push(`[sound:${zipPath}]`);
                             } else {
@@ -663,19 +808,24 @@ const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia, keepS
 
     const usedCardTypes = Array.from(cardsByCardType.keys()).map((x) => cardTypes.get(x));
 
+    const mediacacheDb = await openMediaChacheIdb();
+    if (shouldIncludeMedia) {
+        await mediaCacheGatherAllMedia(mediacacheDb, cardsByCardType, cardTypes);
+    }
+
     let zip = new JSZip();
     const ankiDb = initNewAnkiSqlDb(SQL);
 
     const reviewHistory = fetchReviewHistory(db).filter((x) => !x.del);
     ankiDbFillRevlog(ankiDb, reviewHistory, cards);
     const cardTypeIdsToModelIds = ankiDbPutCol(ankiDb, usedCardTypes);
-    await ankiDbFillCards(ankiDb, zip, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax);
+    await ankiDbFillCards(ankiDb, mediacacheDb, zip, cardsByCardType, cardTypes, cardTypeIdsToModelIds, shouldIncludeMedia, keepSyntax);
 
     const exportedDb = ankiDb.export();
     zip.file("collection.anki2", exportedDb);
-    document.getElementById(statusMessageElemId).innerText = `Constructing apkg file (be patient)`;
+    setStatus(`Constructing apkg file (be patient)`);
     zip.generateAsync({type: "blob"}).then((zipBlob) => {
-        document.getElementById(statusMessageElemId).innerText = "Done";
+        setStatus("Done");
 
         const url = URL.createObjectURL(zipBlob);
 
