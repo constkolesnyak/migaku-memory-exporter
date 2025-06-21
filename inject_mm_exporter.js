@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://study.migaku.com/*
 // @grant       GM_getResourceURL
-// @version     1.4
+// @version     1.5
 // @author      -
 // @description 29/05/2025, 13:09:19
 // @require      data:application/javascript,%3BglobalThis.setImmediate%3DsetTimeout%3B
@@ -238,7 +238,7 @@ const fetchReviewHistory = (db) => {
 };
 
 const fetchWordListForLang = (db, lang) => {
-    return fetchDbRowsAsObjectArray(db, "SELECT dictForm, secondary, partOfSpeech, language, mod, serverMod, del, knownStatus, hasCard, tracked FROM WordList");
+    return fetchDbRowsAsObjectArray(db, "SELECT dictForm, secondary, partOfSpeech, language, mod, serverMod, del, knownStatus, hasCard, tracked FROM WordList WHERE language=?", [lang]);
 }
 
 
