@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://study.migaku.com/*
 // @grant       GM_getResourceURL
-// @version     1.3
+// @version     1.4
 // @author      -
 // @description 29/05/2025, 13:09:19
 // @require      data:application/javascript,%3BglobalThis.setImmediate%3DsetTimeout%3B
@@ -236,6 +236,11 @@ const fetchCardTypes = (db) => {
 const fetchReviewHistory = (db) => {
     return fetchDbRowsAsObjectArray(db, "SELECT id, mod, del, day, interval, factor, cardId, duration, type, lapseIndex FROM review");
 };
+
+const fetchWordListForLang = (db, lang) => {
+    return fetchDbRowsAsObjectArray(db, "SELECT dictForm, secondary, partOfSpeech, language, mod, serverMod, del, knownStatus, hasCard, tracked FROM WordList");
+}
+
 
 const initNewAnkiSqlDb = (SQL) => {
     const db = new SQL.Database();
@@ -839,6 +844,72 @@ const doExportDeck = async (SQL, db, deckId, deckName, shouldIncludeMedia, keepS
     });
 };
 
+const doExportWordlist = async (db, lang) => {
+    const wordList = fetchWordListForLang(db, lang);
+
+    const unknown = new Array();
+    const ignored = new Array();
+    const learning = new Array();
+    const known = new Array();
+    const tracked = new Array();
+
+    for (const word of wordList) {
+        if (word.del) continue;
+        switch (word.knownStatus) {
+            case "UNKNOWN":
+                unknown.push(word);
+                break;
+            case "IGNORED":
+                ignored.push(word);
+                break;
+            case "LEARNING":
+                learning.push(word);
+                break;
+            case "KNOWN":
+                known.push(word);
+                break;
+            default:
+                console.log("UNKNOWN WORD STATUS: " + word.knownStatus);
+                break;
+        }
+        if (word.tracked) {
+            tracked.push(word);
+        }
+    }
+
+    const escape = (x) => {
+        return '"' + x.replaceAll('"', '""') + '"';
+    }
+
+    const arrToCsv = (arr) => {
+        const header = "dictForm,secondary,hasCard";
+        const rows = new Array();
+        for (const word of arr) {
+            rows.push(`${escape(word.dictForm)},${escape(word.secondary)},${word.hasCard}`);
+        }
+        return header + "\n" + rows.join("\n");
+    };
+
+    let zip = new JSZip();
+    zip.file("unknown.csv", arrToCsv(unknown));
+    zip.file("ignored.csv", arrToCsv(ignored));
+    zip.file("learning.csv", arrToCsv(learning));
+    zip.file("known.csv", arrToCsv(known));
+    zip.file("tracked.csv", arrToCsv(tracked));
+    zip.generateAsync({type: "blob"}).then((zipBlob) => {
+        const url = URL.createObjectURL(zipBlob);
+
+        const dlElem = document.createElement("a");
+        dlElem.href = url;
+        dlElem.download = `wordlists.zip`;
+        dlElem.style = "display: none;";
+        document.body.appendChild(dlElem);
+
+        dlElem.click();
+    });
+};
+
+
 function waitForMigaku(cb) {
     const observer = new MutationObserver((_, observer) => {
         if (document.querySelector(".HomeDecks")) {
@@ -896,6 +967,12 @@ const inject = async () => {
 
     const statusMessageElem = div.appendChild(document.createElement("div"));
     statusMessageElem.id = statusMessageElemId;
+
+    const exportWordlistButton = div.appendChild(document.createElement("button"));
+    exportWordlistButton.innerText = "Export word statuses";
+    exportWordlistButton.onclick = async () => {
+        await doExportWordlist(srsDb, migakuLang);
+    };
 }
 
 waitForMigaku(() => {
