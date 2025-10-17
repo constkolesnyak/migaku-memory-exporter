@@ -10,7 +10,7 @@
 - Cards
 - Review history
 - (Optionally) Media
-- (Optionally) Migaku card template for Anki.
+- (Optionally) Migaku card template for Anki
 
 ### Word lists
 - Word statuses for the selected language, including tracked words
