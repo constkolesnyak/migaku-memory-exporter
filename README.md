@@ -1,7 +1,7 @@
 # Migaku Memory Exporter
 
 1. Add [Migaku Memory Exporter](migaku_exporter.js)
-   to your userscript manager
+   to your userscript manager.
 2. Buttons will appear [here](https://study.migaku.com).
 
 ## Exported Content
